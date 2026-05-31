@@ -1,0 +1,48 @@
+# Video clips and generated media
+data/clips/
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# Environment and secrets
+.env
+
+# Databases
+*.db
+data/*.db
+
+# Generated event outputs
+data/all_events*.jsonl
+data/events*.jsonl
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# ML model weights (downloaded at runtime)
+yolov8n.pt
+*.pt
+
+# Test and tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*~
+Thumbs.db
+Desktop.ini
+
+# Keep example env and sample CSV in repo
+!.env.example
+!data/pos_transactions.csv
+!data/seed_events.py

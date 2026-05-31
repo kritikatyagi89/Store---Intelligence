@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+pydantic
+sqlalchemy
+alembic
+python-dotenv
+opencv-python>=4.8,<4.10
+ultralytics
+numpy>=1.24,<2
+supervision
+pandas
+requests
+rich

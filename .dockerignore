@@ -1,0 +1,13 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+.pytest_cache
+.env
+data/clips
+*.mp4
+*.db
+data/all_events*.jsonl
+data/events*.jsonl
+*.pt
+!yolov8n.pt

@@ -1,0 +1,67 @@
+{
+  "store_id": "STORE_BLR_002",
+  "store_name": "Purplle Brigade Road Bangalore",
+  "zones": [
+    {
+      "zone_id": "FOH",
+      "zone_name": "Front of House",
+      "camera": "CAM_FLOOR_01"
+    },
+    {
+      "zone_id": "CASH_COUNTER",
+      "zone_name": "Cash Counter",
+      "camera": "CAM_BILLING_01"
+    },
+    {
+      "zone_id": "MAKEUP_UNIT",
+      "zone_name": "Makeup Unit",
+      "camera": "CAM_FLOOR_01"
+    },
+    {
+      "zone_id": "FRAGRANCE",
+      "zone_name": "Fragrance",
+      "camera": "CAM_FLOOR_01"
+    },
+    {
+      "zone_id": "NAIL_UNIT",
+      "zone_name": "Nail Unit",
+      "camera": "CAM_FLOOR_01"
+    },
+    {
+      "zone_id": "ENTRY_LOBBY",
+      "zone_name": "Entry Lobby",
+      "camera": "CAM_ENTRY_01"
+    },
+    {
+      "zone_id": "SKINCARE_SHELF",
+      "zone_name": "Skincare Shelf",
+      "camera": "CAM_FLOOR_01"
+    },
+    {
+      "zone_id": "MAKEUP_SHELF",
+      "zone_name": "Makeup Shelf",
+      "camera": "CAM_FLOOR_01"
+    }
+  ],
+  "open_hours": {
+    "open": "10:00",
+    "close": "22:00"
+  },
+  "cameras": [
+    {
+      "camera_id": "CAM_ENTRY_01",
+      "type": "entry_exit",
+      "position": "main_entrance"
+    },
+    {
+      "camera_id": "CAM_FLOOR_01",
+      "type": "main_floor",
+      "position": "ceiling_centre"
+    },
+    {
+      "camera_id": "CAM_BILLING_01",
+      "type": "billing",
+      "position": "cash_counter"
+    }
+  ]
+}

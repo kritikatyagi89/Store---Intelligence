@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import uuid
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -21,6 +22,28 @@ DWELL_INTERVAL_SEC = 30
 REENTRY_WINDOW = timedelta(minutes=10)
 MIN_REENTRY_GAP = timedelta(seconds=60)
 COSINE_SIMILARITY_MIN = 0.85
+
+STORE_LAYOUT_PATH = Path(__file__).resolve().parent.parent / "data" / "store_layout.json"
+
+CAMERA_ZONE_MAP: dict[str, str] = {
+    "CAM_ENTRY_01": "ENTRY_LOBBY",
+    "CAM_FLOOR_01": "FOH",
+    "CAM_BILLING_01": "CASH_COUNTER",
+    "CAM_ENTRY_02": "ENTRY_LOBBY",
+    "CAM_FLOOR_02": "FOH",
+}
+
+FLOOR_CAMERAS = frozenset({"CAM_FLOOR_01", "CAM_FLOOR_02"})
+
+
+def _load_store_layout() -> dict[str, Any]:
+    if not STORE_LAYOUT_PATH.exists():
+        return {}
+    with STORE_LAYOUT_PATH.open("r", encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+STORE_LAYOUT = _load_store_layout()
 
 
 @dataclass
@@ -43,6 +66,7 @@ class TrackState:
     zone_id: str | None = None
     zone_enter_time: datetime | None = None
     last_dwell_emit: datetime | None = None
+    billing_join_emitted: bool = False
     missed_frames: int = 0
 
 
@@ -225,13 +249,29 @@ def _side_of_line(cy: float, threshold_y: float) -> str:
     return "below" if cy >= threshold_y else "above"
 
 
-def _zone_from_y(cy: float, frame_height: int) -> str:
-    ratio = cy / frame_height
-    if ratio < 0.4:
-        return "ENTRY_LOBBY"
-    if ratio < 0.7:
-        return "MAIN_FLOOR"
-    return "BACK_ZONE"
+def _floor_zone_from_x(cx: float, frame_width: int) -> str:
+    """Sub-divide floor camera view by horizontal centroid position."""
+    if cx < frame_width / 3:
+        return "FRAGRANCE"
+    if cx > 2 * frame_width / 3:
+        return "MAKEUP_UNIT"
+    return "FOH"
+
+
+def _resolve_zone_id(
+    camera_id: str,
+    event_type: str,
+    cx: float,
+    frame_width: int,
+) -> str | None:
+    """Assign zone_id from store layout and camera mapping."""
+    if event_type in ("ENTRY", "EXIT", "REENTRY"):
+        return None
+    if event_type == "BILLING_QUEUE_JOIN":
+        return "CASH_COUNTER"
+    if camera_id in FLOOR_CAMERAS:
+        return _floor_zone_from_x(cx, frame_width)
+    return CAMERA_ZONE_MAP.get(camera_id)
 
 
 def _is_staff_uniform(frame: np.ndarray, bbox: tuple[int, int, int, int]) -> bool:
@@ -267,6 +307,7 @@ def _make_event(
     is_staff: bool = False,
     confidence: float = 0.91,
     session_seq: int = 1,
+    queue_depth: int | None = None,
 ) -> dict[str, Any]:
     return {
         "event_id": str(uuid.uuid4()),
@@ -280,20 +321,27 @@ def _make_event(
         "is_staff": is_staff,
         "confidence": round(confidence, 2),
         "metadata": {
-            "queue_depth": None,
-            "sku_zone": None,
+            "queue_depth": queue_depth,
+            "sku_zone": zone_id,
             "session_seq": session_seq,
         },
     }
 
 
-def _count_event_types(events: list[dict[str, Any]]) -> dict[str, int]:
-    counts = {"ENTRY": 0, "EXIT": 0, "REENTRY": 0}
-    for event in events:
-        et = event.get("event_type")
-        if et in counts:
-            counts[et] += 1
-    return counts
+def _print_run_summary(events: list[dict[str, Any]], camera_id: str) -> None:
+    type_counts = Counter(e["event_type"] for e in events)
+    zone_counts = Counter(e["zone_id"] for e in events if e.get("zone_id"))
+
+    print(f"\n=== {camera_id} ===")
+    print("Event type counts:")
+    for event_type in sorted(type_counts):
+        print(f"  {event_type}: {type_counts[event_type]}")
+    print("Zone distribution:")
+    if zone_counts:
+        for zone in sorted(zone_counts):
+            print(f"  {zone}: {zone_counts[zone]}")
+    else:
+        print("  (no zoned events)")
 
 
 def process_video(
@@ -316,6 +364,7 @@ def process_video(
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     threshold_y = frame_height * 0.4
 
     base_time = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -354,6 +403,7 @@ def process_video(
                 detections.append((cx, cy, conf, bbox, staff, fp))
 
         tracks = tracker.update(detections, store_id, exited_visitors, frame_time)
+        active_tracks = [t for t in tracks.values() if t.missed_frames == 0]
 
         for tid, track in tracks.items():
             if track.missed_frames > 0:
@@ -378,6 +428,7 @@ def process_video(
                         track.visitor_id,
                         event_type,
                         frame_time,
+                        zone_id=None,
                         is_staff=track.is_staff,
                         confidence=track.confidence,
                         session_seq=seq,
@@ -393,6 +444,7 @@ def process_video(
                         track.visitor_id,
                         "EXIT",
                         frame_time,
+                        zone_id=None,
                         is_staff=track.is_staff,
                         confidence=track.confidence,
                         session_seq=seq,
@@ -410,12 +462,54 @@ def process_video(
 
             prev_side[tid] = current_side
 
-            zone = _zone_from_y(track.cy, frame_height)
+            # Billing queue join (once per track on billing camera)
+            if (
+                camera_id == "CAM_BILLING_01"
+                and not track.billing_join_emitted
+            ):
+                zone = _resolve_zone_id(
+                    camera_id, "BILLING_QUEUE_JOIN", track.cx, frame_width
+                )
+                events.append(
+                    _make_event(
+                        store_id,
+                        camera_id,
+                        track.visitor_id,
+                        "BILLING_QUEUE_JOIN",
+                        frame_time,
+                        zone_id=zone,
+                        is_staff=track.is_staff,
+                        confidence=track.confidence,
+                        session_seq=session_seq.get(track.visitor_id, 1),
+                        queue_depth=len(active_tracks),
+                    )
+                )
+                track.billing_join_emitted = True
+
+            zone = _resolve_zone_id(camera_id, "ZONE_DWELL", track.cx, frame_width)
             if track.zone_id != zone:
                 track.zone_id = zone
                 track.zone_enter_time = frame_time
                 track.last_dwell_emit = frame_time
-            elif track.zone_enter_time is not None and track.last_dwell_emit is not None:
+                if zone is not None:
+                    events.append(
+                        _make_event(
+                            store_id,
+                            camera_id,
+                            track.visitor_id,
+                            "ZONE_ENTER",
+                            frame_time,
+                            zone_id=zone,
+                            is_staff=track.is_staff,
+                            confidence=track.confidence,
+                            session_seq=session_seq.get(track.visitor_id, 1),
+                        )
+                    )
+            elif (
+                track.zone_enter_time is not None
+                and track.last_dwell_emit is not None
+                and zone is not None
+            ):
                 elapsed = (frame_time - track.last_dwell_emit).total_seconds()
                 if elapsed >= DWELL_INTERVAL_SEC:
                     events.append(
@@ -442,12 +536,7 @@ def process_video(
         for event in events:
             fh.write(json.dumps(event) + "\n")
 
-    counts = _count_event_types(events)
-    print(
-        f"Event counts — ENTRY: {counts['ENTRY']}, "
-        f"EXIT: {counts['EXIT']}, REENTRY: {counts['REENTRY']}"
-    )
-
+    _print_run_summary(events, camera_id)
     return events
 
 
@@ -458,6 +547,11 @@ def main() -> None:
     parser.add_argument("--camera-id", required=True, help="Camera identifier")
     parser.add_argument("--output", required=True, help="Output JSONL path")
     args = parser.parse_args()
+
+    if STORE_LAYOUT:
+        print(f"Loaded store layout: {STORE_LAYOUT.get('store_name', STORE_LAYOUT_PATH)}")
+    else:
+        print(f"Warning: store layout not found at {STORE_LAYOUT_PATH}")
 
     events = process_video(args.video, args.store_id, args.camera_id, args.output)
     print(f"Wrote {len(events)} events to {args.output}")
